@@ -1,0 +1,12 @@
+.idea/
+.vscode/
+__pycache__/
+*.egg*/
+.mypy_cache/
+.tags
+tags
+tags.temp
+tags.lock
+.ycm_extra_conf.py
+.gdb_history
+.ignore/

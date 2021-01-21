@@ -35,7 +35,10 @@ class Port:
 
     @property
     def status(self) -> str:
-        return self._status
+        if self._status:
+            return self._status
+        else:
+            return "none"
 
     @property
     def changed(self) -> bool:
@@ -107,23 +110,6 @@ class Card:
             self._changed |= port.changed
 
 
-class Watcher:
-    def __init__(self, cards: List[Card]):
-        self._cards = cards
-        self._changed = False
-
-    @property
-    def changed(self) -> bool:
-        return self._changed
-
-    def poll(self):
-        self._changed = False
-        for card in self._cards:
-            LOG.debug("Updating ports for card '%s'", card)
-            card.update()
-            self._changed |= card.changed
-
-
 def enum_cards() -> List[Card]:
     LOG.debug("Enumerating DRM devices in '%s'", DRM_PATH)
     items = os.listdir(DRM_PATH)
@@ -140,50 +126,74 @@ def enum_cards() -> List[Card]:
 
 def getargs():
     parser = argparse.ArgumentParser()
-    parser.add_argument("-p",
-                        "--polling-rate",
-                        default=0.2,
-                        type=float,
-                        help="Display status polling rate. Defaults to 0.2")
-    parser.add_argument("-v",
-                        "--verbose",
-                        action="count",
-                        default=0,
-                        help="Verbosity level")
-    parser.add_argument("cmd",
-                        nargs="+",
-                        help="Command to execute on state change. Required.")
+    parser.add_argument(
+        "-p",
+        "--polling-rate",
+        default=0.2,
+        type=float,
+        help="Display status polling rate in Hz. Defaults to 0.2",
+    )
+    parser.add_argument(
+        "-v",
+        "--verbose",
+        action="count",
+        default=0,
+        help="Verbosity level. Specify more than once to increase level.",
+    )
+    parser.add_argument(
+        "cmd",
+        nargs="+",
+        help="Command to execute on state change.",
+    )
     return parser.parse_args()
 
 
+class Watcher:
+    def __init__(self):
+        self._cards = enum_cards()
+        self._changed = False
+
+    def poll(self):
+        self._changed = False
+        for card in self._cards:
+            LOG.debug("Updating ports for card '%s'", card)
+            card.update()
+            self._changed |= card.changed
+
+    def run(self):
+        args = getargs()
+
+        # Set logging level.
+        if args.verbose >= 2:
+            log_level = logging.DEBUG
+        elif args.verbose == 1:
+            log_level = logging.INFO
+        else:
+            log_level = logging.WARNING
+        logging.basicConfig(format="[%(levelname)s] %(asctime)s: %(message)s",
+                            datefmt="%Y-%m-%d %H:%M:%S",
+                            level=log_level)
+
+        self.poll()
+        deadline = time.monotonic()
+        while True:
+            if time.monotonic() >= deadline:
+                LOG.debug("Polling devices.")
+                self.poll()
+                if self._changed:
+                    subprocess.run(args.cmd, check=False)
+                deadline += args.polling_rate
+
+            sleep_time = max(0, deadline - time.monotonic())
+            time.sleep(sleep_time)
+
+
 def main():
-    args = getargs()
-
-    # Set logging level.
-    if args.verbose >= 2:
-        log_level = logging.DEBUG
-    elif args.verbose == 1:
-        log_level = logging.INFO
-    else:
-        log_level = logging.WARNING
-    logging.basicConfig(format="[%(levelname)s] %(asctime)s: %(message)s",
-                        datefmt="%Y-%m-%d %H:%M:%S",
-                        level=log_level)
-
-    cards = enum_cards()
-    watcher = Watcher(cards)
-    watcher.poll()
-    deadline = time.monotonic()
-    while True:
-        if time.monotonic() >= deadline:
-            LOG.debug("Polling devices.")
-            watcher.poll()
-            if watcher.changed:
-                subprocess.run(args.cmd, check=False)
-            deadline += args.polling_rate
-
-        sleep_time = max(0, deadline - time.monotonic())
-        time.sleep(sleep_time)
+    try:
+        watcher = Watcher()
+        watcher.run()
+    except KeyboardInterrupt:
+        print("User requested termination.")
 
 
 if __name__ == "__main__":
